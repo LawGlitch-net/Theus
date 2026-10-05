@@ -1,0 +1,87 @@
+# Local Native Speech Commands
+
+Uses the browser's `SpeechRecognition` API with `processLocally = true`.
+Audio recognition and wake-word matching stay on-device; the app never falls
+back to remote/browser-cloud recognition. The browser may download its own
+local language pack before listening can start.
+
+- **Wake word:** continuously compares recognized whole-word tokens with the
+  configured wake phrase. The native recognizer receives a phrase-bias hint
+  when the browser supports it.
+- **AI trigger phrase:** configure one to six words (default `send`). Matching
+  tolerates small spelling errors and adjacent transpositions, including when
+  the phrase is split across recognition results. The trigger is displayed on
+  the glasses but excluded from AI text. The rolling local history holds up to
+  512 words.
+- **Glasses:** after wake activation, buffers words and sends configurable
+  chunks to Endpoint 1 as `POST /display` JSON (`{"text":"..."}`). Set the
+  endpoint to the device route, defaulting to
+  `http://192.168.31.180/display`. Each request uses centered text, top
+  vertical alignment, font level 3, and scroll speed 10 to match the n8n
+  example. Small trailing chunks flush after 700 ms without ending wake
+  detection; the configurable minimum post interval defaults to 350 ms.
+- **AI pipeline:** say the configured trigger phrase after the wake phrase.
+  Endpoint 2 receives the configured number of most recent recognized words as JSON:
+  `{"event":"voice_command","command":"send","wordCount":20,"text":"..."}`.
+
+## Files
+- `index.html` — UI, local speech recognition, wake-word matching, and endpoint relay
+- `speech-text.mjs` — tokenization, normalization, and fuzzy trigger matching
+
+No build step or npm install is needed.
+Settings, including endpoints, language, wake/AI trigger words, and word
+counts, are automatically saved in the browser's IndexedDB.
+
+---
+
+## Option A — Cloudflare Pages (what you're already using)
+
+1. Push `index.html` to the root of your Pages project (or a subfolder).
+2. Deploy as a static site — no build command needed.
+3. Open the deployed `https://your-project.pages.dev` URL.
+4. Set Endpoint 1 to the glasses' `/display` URL. Browsers may block an HTTPS
+  page from calling the glasses over plain HTTP as mixed content; CORS support
+  on the ESP32 does not override that restriction. Use a trusted HTTPS proxy
+  that can reach the ESP32, or another browser-approved secure route to it.
+
+## Option B — Self-host on your PC (serves over plain HTTP, zero mixed-content issues)
+
+```bash
+cd stt-app
+python3 -m http.server 8080
+```
+
+Then open `http://localhost:8080` on the PC. For mobile microphone access, the
+page must be served from a secure context (normally HTTPS); opening the PC's
+plain-HTTP LAN address on a phone generally does not qualify. HTTPS hosting
+also needs a secure route to the ESP32 because browsers can block HTTPS-to-HTTP
+requests. Use a trusted local HTTPS proxy or another secure route that can
+reach the device.
+
+Use a desktop browser that supports on-device `SpeechRecognition` language
+packs (currently Chromium-based desktop browsers with the local recognition
+API). On first start, the app checks or installs the selected local language
+pack. Microphone permission is requested immediately when you press Start, before
+any language-pack download begins. Use HTTPS or localhost and keep the page visible; browser support for local
+recognition and wake locks varies, and background tabs may still be suspended.
+The native recognizer captures and preprocesses its own microphone audio; the
+Web Speech API does not accept an externally preprocessed audio stream. A web
+page cannot guarantee continuous recognition while backgrounded or suspended.
+Many mobile browsers do not yet expose the local language-pack API. In those
+browsers the app reports local STT as unsupported and does not silently use a
+remote recognizer.
+
+---
+
+## Recognition behavior
+
+Wake matching uses final native-recognition results, normalized into whole
+word tokens so punctuation and capitalization do not prevent a match. The
+application retains at most 512 recent recognized words locally. The wake
+phrase and `send` command are excluded from the words sent to Endpoint 2.
+Wake/send phrase bias is intentionally low to avoid making the recognizer
+hallucinate the trigger words. Consecutive repeated speech tokens are capped
+to two, and adjacent duplicates are collapsed in the AI payload. Results with
+a reported confidence below the configurable threshold (default `0.25`) are
+ignored; set it to `0` to disable confidence filtering. Browsers that do not
+report a confidence value are not filtered by this setting.

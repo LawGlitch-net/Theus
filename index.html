@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local Speech Commands &middot; SmartGlasses</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); } 100% { box-shadow: 0 0 0 14px rgba(16,185,129,0); } }
+  .pulse-ring { animation: pulse-ring 1.6s cubic-bezier(0.4,0,0.6,1) infinite; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  #logPane { scrollbar-gutter: stable; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 sm:p-6 font-sans">
+
+  <div class="max-w-3xl mx-auto space-y-5">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+      <div>
+        <h1 class="text-lg sm:text-xl font-bold tracking-tight">Local Speech Commands</h1>
+        <p class="text-xs text-slate-500 mt-0.5">Browser-native speech recognition &middot; local wake word</p>
+      </div>
+      <div id="statusBadge" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700 whitespace-nowrap">
+        Engine Off
+      </div>
+    </div>
+
+    <!-- Live Screen -->
+    <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg space-y-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs uppercase tracking-wider text-slate-400 font-bold">Wake Word State</span>
+        <div class="flex items-center gap-2">
+          <span id="wakeWordIndicator" class="relative h-3 w-3 rounded-full bg-slate-700"></span>
+          <span id="wakeWordLabel" class="text-xs text-slate-500">idle</span>
+        </div>
+      </div>
+
+      <div class="min-h-[100px] p-4 bg-slate-950 rounded-lg border border-slate-800 text-base sm:text-lg font-mono text-emerald-400 break-words" id="liveTranscript">
+        <span class="text-slate-600">Transcribed text will appear here…</span>
+      </div>
+
+      <div class="flex items-center justify-between text-xs text-slate-500">
+        <span id="vadIndicator">Mic idle</span>
+        <span id="engineLatency" class="mono"></span>
+      </div>
+    </div>
+
+    <!-- ESP32 chunk preview -->
+    <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xs uppercase tracking-wider text-slate-400 font-bold">ESP32 Display Preview (72&times;40px)</h2>
+        <span id="chunkCounter" class="text-xs text-slate-500 mono">0 chunks sent</span>
+      </div>
+      <div class="bg-black rounded border-2 border-slate-700 p-2 flex items-center justify-center" style="aspect-ratio: 72/40; max-width: 216px;">
+        <div id="esp32Preview" class="text-emerald-400 text-[9px] leading-tight mono text-center break-words px-1">&nbsp;</div>
+      </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg space-y-4">
+      <button id="toggleConfig" class="w-full flex items-center justify-between text-sm font-semibold text-slate-200">
+        <span>Settings</span>
+        <span id="configChevron" class="text-slate-500 transition-transform">&#9660;</span>
+      </button>
+
+      <div id="configBody" class="space-y-4 pt-2 border-t border-slate-800">
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Local recognition language</label>
+            <select id="cfgLanguage" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+              <option value="en-US" selected>English (US)</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="bn-IN">Bengali (India)</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Wake word to start capture</label>
+          <input type="text" id="cfgWakeWord" value="hey jarvis" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">AI webhook trigger word or phrase</label>
+          <input type="text" id="cfgSendTrigger" value="send" maxlength="80" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">ESP32 chunk size (words)</label>
+            <input type="number" id="cfgChunkWords" value="4" min="1" max="10" step="1" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Words to send to AI</label>
+            <input type="number" id="cfgSendWords" value="20" min="1" max="128" step="1" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Minimum delay between display updates (ms)</label>
+          <input type="number" id="cfgChunkInterval" value="350" min="0" max="5000" step="50" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Ignore speech below confidence (0 disables filter)</label>
+          <input type="number" id="cfgMinConfidence" value="0.25" min="0" max="0.95" step="0.05" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Endpoint 1 &mdash; SmartGlasses display route</label>
+          <input type="url" id="cfgEndpoint1" value="http://192.168.31.180/display" placeholder="http://192.168.31.180/display" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Endpoint 2 &mdash; AI pipeline</label>
+          <input type="url" id="cfgEndpoint2" placeholder="http://192.168.1.50:9000/webhook" class="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500">
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="cfgRequireWake" checked class="rounded bg-slate-950 border-slate-700">
+          <label for="cfgRequireWake" class="text-xs text-slate-300">Require wake word before streaming (uncheck to always stream)</label>
+        </div>
+      </div>
+
+      <button id="btnToggle" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-lg font-bold text-white transition">
+        Start Local Listening
+      </button>
+    </div>
+
+    <!-- Activity log -->
+    <div class="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg space-y-2">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xs uppercase tracking-wider text-slate-400 font-bold">Activity Log</h2>
+        <button id="clearLog" class="text-xs text-slate-500 hover:text-slate-300">Clear</button>
+      </div>
+      <div id="logPane" class="h-40 overflow-y-auto text-xs mono space-y-1 bg-slate-950 rounded p-3 border border-slate-800"></div>
+    </div>
+
+    <p class="text-center text-[11px] text-slate-600 pb-6">
+      Recognition and wake-word matching run on-device. Only display chunks and explicit send commands go to configured endpoints.
+    </p>
+  </div>
+
+<script type="module">
+import { collapseRepeatedWords, isApproximatePhraseMatch, normalizeWord, wordsFromText } from './speech-text.mjs';
+
+const el = (id) => document.getElementById(id);
+const btnToggle = el('btnToggle');
+const liveTranscript = el('liveTranscript');
+const wakeWordIndicator = el('wakeWordIndicator');
+const wakeWordLabel = el('wakeWordLabel');
+const statusBadge = el('statusBadge');
+const vadIndicator = el('vadIndicator');
+const esp32Preview = el('esp32Preview');
+const chunkCounter = el('chunkCounter');
+const logPane = el('logPane');
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const localSpeechSupported = (() => {
+  if (!Recognition || typeof Recognition.available !== 'function' || typeof Recognition.install !== 'function') return false;
+  try {
+    return 'processLocally' in new Recognition();
+  } catch {
+    return false;
+  }
+})();
+const MAX_HISTORY_WORDS = 512;
+let recognition = null;
+let isListening = false;
+let isStarting = false;
+let isSendingAI = false;
+let isTriggered = false;
+let screenWakeLock = null;
+let phraseTimer = null;
+let restartTimer = null;
+let recognitionStartTimer = null;
+let recognitionHealthyTimer = null;
+let restartAttempts = 0;
+let configSaveTimer = null;
+let finalResultIndex = 0;
+let phraseWords = [];
+let displayWords = [];
+let recentWords = [];
+let sendTriggerTail = [];
+let lastRecognitionWord = '';
+let repeatedRecognitionWordCount = 0;
+let lastRecognitionWordAt = 0;
+let wakeTail = [];
+let chunkSentCount = 0;
+let displayPostQueue = Promise.resolve();
+let lastDisplayPostAt = 0;
+let settingsEdited = false;
+let databasePromise = null;
+let settingsReady = Promise.resolve();
+
+const CONFIG_IDS = [
+  'cfgLanguage',
+  'cfgWakeWord',
+  'cfgSendTrigger',
+  'cfgChunkWords',
+  'cfgChunkInterval',
+  'cfgMinConfidence',
+  'cfgSendWords',
+  'cfgEndpoint1',
+  'cfgEndpoint2',
+  'cfgRequireWake',
+];
+
+el('toggleConfig').addEventListener('click', () => {
+  const body = el('configBody');
+  const open = !body.classList.contains('hidden');
+  body.classList.toggle('hidden');
+  el('configChevron').style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+});
+el('clearLog').addEventListener('click', () => { logPane.innerHTML = ''; });
+
+function openSettingsDatabase() {
+  if (!('indexedDB' in window)) return Promise.reject(new Error('IndexedDB is not available'));
+  if (!databasePromise) {
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open('prometheus-speech-settings', 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('settings')) request.result.createObjectStore('settings');
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Could not open settings database'));
+    }).catch((error) => {
+      databasePromise = null;
+      throw error;
+    });
+  }
+  return databasePromise;
+}
+
+function readSettingsFromForm() {
+  return Object.fromEntries(CONFIG_IDS.map((id) => {
+    const input = el(id);
+    return [id, input.type === 'checkbox' ? input.checked : input.value];
+  }));
+}
+
+async function loadSettings() {
+  try {
+    const database = await openSettingsDatabase();
+    const stored = await new Promise((resolve, reject) => {
+      const request = database.transaction('settings', 'readonly').objectStore('settings').get('app');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Could not read saved settings'));
+    });
+    if (!stored || settingsEdited) return;
+    if (stored.cfgEndpoint1 === 'http://192.168.4.1/display') {
+      stored.cfgEndpoint1 = 'http://192.168.31.180/display';
+    }
+    for (const [id, value] of Object.entries(stored)) {
+      if (!CONFIG_IDS.includes(id)) continue;
+      const input = el(id);
+      if (input.type === 'checkbox') input.checked = Boolean(value);
+      else input.value = String(value);
+    }
+    log('Saved settings restored from this browser.', 'green');
+  } catch (error) {
+    log(`Browser settings storage unavailable: ${error.message}`, 'yellow');
+  }
+}
+
+async function saveSettings() {
+  try {
+    const database = await openSettingsDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction('settings', 'readwrite');
+      transaction.objectStore('settings').put(readSettingsFromForm(), 'app');
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error('Could not save settings'));
+      transaction.onabort = () => reject(transaction.error || new Error('Settings save was aborted'));
+    });
+  } catch (error) {
+    log(`Could not save settings: ${error.message}`, 'red');
+  }
+}
+
+function scheduleSettingsSave() {
+  settingsEdited = true;
+  clearTimeout(configSaveTimer);
+  configSaveTimer = setTimeout(saveSettings, 250);
+}
+
+for (const id of CONFIG_IDS) {
+  el(id).addEventListener('input', scheduleSettingsSave);
+  el(id).addEventListener('change', scheduleSettingsSave);
+}
+settingsReady = loadSettings();
+
+function log(message, tone = 'slate') {
+  const colors = { slate: 'text-slate-400', green: 'text-emerald-400', red: 'text-red-400', yellow: 'text-amber-400' };
+  const line = document.createElement('div');
+  line.className = colors[tone] || colors.slate;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  logPane.appendChild(line);
+  logPane.scrollTop = logPane.scrollHeight;
+}
+
+function isRepeatedRecognitionWord(word) {
+  const normalized = normalizeWord(word);
+  const now = Date.now();
+  if (normalized === lastRecognitionWord && now - lastRecognitionWordAt < 3000) {
+    repeatedRecognitionWordCount++;
+  } else {
+    lastRecognitionWord = normalized;
+    repeatedRecognitionWordCount = 1;
+  }
+  lastRecognitionWordAt = now;
+  return repeatedRecognitionWordCount > 2;
+}
+
+function configuredWakeWords() {
+  return wordsFromText(el('cfgWakeWord').value).map(normalizeWord);
+}
+
+function configuredSendTriggerWords() {
+  return wordsFromText(el('cfgSendTrigger').value).map(normalizeWord);
+}
+
+function setWakeState(active) {
+  isTriggered = active;
+  wakeWordIndicator.className = active
+    ? 'relative h-3 w-3 rounded-full bg-emerald-500 pulse-ring'
+    : 'relative h-3 w-3 rounded-full bg-slate-700';
+  wakeWordLabel.textContent = active ? 'triggered — listening for command' : 'idle';
+}
+
+function rememberWord(word) {
+  recentWords.push(word);
+  if (recentWords.length > MAX_HISTORY_WORDS) recentWords.shift();
+}
+
+function aiReadyWords(words) {
+  return collapseRepeatedWords(words);
+}
+
+async function postJSON(url, body) {
+  if (!url) {
+    log('Configure the AI pipeline endpoint first.', 'yellow');
+    return false;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      mode: 'cors',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      log(`POST to ${url} returned HTTP ${response.status}`, 'red');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    log(`POST to ${url} failed: ${error.message}`, 'red');
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sendDisplayChunk(words) {
+  if (!words.length) return;
+  const text = words.join(' ');
+  const endpoint = el('cfgEndpoint1').value;
+  const body = {
+    text,
+    align: 'center',
+    valign: 'top',
+    fontSize: 3,
+    scroll: 'auto',
+    scrollSpeed: 10,
+    wrap: true,
+  };
+  displayPostQueue = displayPostQueue.then(async () => {
+    const interval = Math.max(0, Math.min(5000, Number.parseInt(el('cfgChunkInterval').value, 10) || 0));
+    const waitMs = interval - (Date.now() - lastDisplayPostAt);
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    lastDisplayPostAt = Date.now();
+    if (await postJSON(endpoint, body)) {
+      chunkSentCount++;
+      chunkCounter.textContent = `${chunkSentCount} chunks sent`;
+      log(`Glasses <- "${text}"`, 'slate');
+    }
+  }).catch((error) => {
+    log(`Queued display update failed: ${error.message}`, 'red');
+  });
+  esp32Preview.textContent = text;
+}
+
+function flushDisplayBuffer() {
+  if (displayWords.length) sendDisplayChunk(displayWords.splice(0));
+}
+
+function addPhraseWord(word) {
+  phraseWords.push(word);
+  displayWords.push(word);
+  if (phraseWords.length > MAX_HISTORY_WORDS) phraseWords.shift();
+  liveTranscript.textContent = phraseWords.join(' ');
+  const chunkSize = Math.max(1, Number.parseInt(el('cfgChunkWords').value, 10) || 4);
+  while (displayWords.length >= chunkSize) sendDisplayChunk(displayWords.splice(0, chunkSize));
+  clearTimeout(phraseTimer);
+  phraseTimer = setTimeout(flushDisplayBuffer, 700);
+}
+
+async function sendRecentWords() {
+  if (isSendingAI) return;
+  isSendingAI = true;
+  try {
+    const wordCount = Math.min(128, Math.max(1, Number.parseInt(el('cfgSendWords').value, 10) || 20));
+    const rawWords = recentWords.slice(-wordCount);
+    const selectedWords = aiReadyWords(rawWords);
+    if (!selectedWords.length) {
+      log('No recorded words are available to send.', 'yellow');
+      return;
+    }
+    if (selectedWords.length !== rawWords.length) {
+      log(`Removed ${rawWords.length - selectedWords.length} adjacent duplicate word(s) from the AI input.`, 'yellow');
+    }
+    const text = selectedWords.join(' ');
+    clearTimeout(phraseTimer);
+    flushDisplayBuffer();
+    phraseWords = [];
+    sendTriggerTail = [];
+    setWakeState(false);
+    liveTranscript.textContent = 'Listening for wake word…';
+    const sent = await postJSON(el('cfgEndpoint2').value, {
+      event: 'voice_command',
+      command: 'send',
+      timestamp: Date.now(),
+      wordCount: selectedWords.length,
+      text,
+    });
+    if (sent) log(`AI pipeline <- last ${selectedWords.length} words: "${text}"`, 'green');
+  } finally {
+    isSendingAI = false;
+  }
+}
+
+function wakeMatchesTail(wakeWords) {
+  return wakeWords.length > 0 && wakeWords.every((word, index) =>
+    wakeTail[wakeTail.length - wakeWords.length + index] === word);
+}
+
+function processFinalTranscript(text) {
+  const wakeWords = configuredWakeWords();
+  const sendTriggerWords = configuredSendTriggerWords();
+  const requireWake = el('cfgRequireWake').checked;
+  for (const word of wordsFromText(text)) {
+    const normalized = normalizeWord(word);
+    if (isTriggered && isSendingAI) continue;
+
+    if (isRepeatedRecognitionWord(word)) {
+      if (!isTriggered && requireWake) {
+        wakeTail.push(normalized);
+        if (wakeTail.length > wakeWords.length) wakeTail.shift();
+      }
+      continue;
+    }
+
+    rememberWord(word);
+    if (!isTriggered && requireWake) {
+      wakeTail.push(normalized);
+      if (wakeTail.length > wakeWords.length) wakeTail.shift();
+      if (wakeMatchesTail(wakeWords)) {
+        recentWords.splice(-wakeWords.length, wakeWords.length);
+        wakeTail = [];
+        phraseWords = [];
+        displayWords = [];
+        sendTriggerTail = [];
+        lastRecognitionWord = '';
+        repeatedRecognitionWordCount = 0;
+        lastRecognitionWordAt = 0;
+        liveTranscript.textContent = '';
+        setWakeState(true);
+        log('Local wake word detected.', 'green');
+      }
+      continue;
+    }
+
+    if (!isTriggered) {
+      setWakeState(true);
+      liveTranscript.textContent = '';
+    }
+    wakeTail = [];
+    addPhraseWord(word);
+    if (isTriggered && sendTriggerWords.length) {
+      sendTriggerTail.push(normalized);
+      if (sendTriggerTail.length > sendTriggerWords.length) sendTriggerTail.shift();
+      if (isApproximatePhraseMatch(sendTriggerTail, sendTriggerWords)) {
+        recentWords.splice(-sendTriggerWords.length, sendTriggerWords.length);
+        sendTriggerTail = [];
+        log('AI trigger phrase detected.', 'green');
+        void sendRecentWords();
+      }
+    }
+  }
+}
+
+function setStatus(text, tone = 'slate') {
+  const styles = {
+    slate: 'px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700',
+    green: 'px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800',
+    yellow: 'px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-400 border border-amber-800',
+    red: 'px-3 py-1.5 rounded-full text-xs font-semibold bg-red-950 text-red-400 border border-red-800',
+  };
+  statusBadge.textContent = text;
+  statusBadge.className = styles[tone];
+}
+
+function createRecognition(language) {
+  const instance = new Recognition();
+  instance.lang = language;
+  instance.continuous = true;
+  instance.interimResults = true;
+  instance.maxAlternatives = 3;
+  instance.processLocally = true;
+  if ('phrases' in instance && typeof SpeechRecognitionPhrase === 'function') {
+    const phrases = [el('cfgWakeWord').value.trim(), el('cfgSendTrigger').value.trim()].filter(Boolean);
+    try {
+      instance.phrases = phrases.map((phrase) => new SpeechRecognitionPhrase(phrase, 2));
+    } catch (error) {
+      log(`Speech phrase hints unavailable: ${error.message}`, 'yellow');
+    }
+  }
+
+  instance.onstart = () => {
+    if (recognition !== instance) return;
+    clearTimeout(recognitionStartTimer);
+    clearTimeout(recognitionHealthyTimer);
+    recognitionHealthyTimer = setTimeout(() => { restartAttempts = 0; }, 60000);
+    vadIndicator.textContent = 'Local speech recognition active';
+    setStatus('Listening locally', 'green');
+  };
+  instance.onaudiostart = () => {
+    vadIndicator.textContent = 'Microphone audio active';
+  };
+  instance.onaudioend = () => {
+    if (isListening) vadIndicator.textContent = 'Waiting for microphone audio';
+  };
+  instance.onsoundstart = () => { vadIndicator.textContent = 'Sound detected'; };
+  instance.onspeechstart = () => { vadIndicator.textContent = 'Voice detected'; };
+  instance.onspeechend = () => { vadIndicator.textContent = 'Listening locally'; };
+  instance.onresult = (event) => {
+    for (let index = Math.max(finalResultIndex, event.resultIndex); index < event.results.length; index++) {
+      const result = event.results[index];
+      const transcript = result[0]?.transcript?.trim();
+      if (result.isFinal) {
+        finalResultIndex = index + 1;
+        const confidence = result[0]?.confidence;
+        const minimumConfidence = Math.max(0, Math.min(0.95, Number.parseFloat(el('cfgMinConfidence').value) || 0));
+        if (transcript && Number.isFinite(confidence) && confidence > 0 && confidence < minimumConfidence) {
+          log(`Ignored low-confidence speech (${confidence.toFixed(2)}).`, 'yellow');
+        } else if (transcript) {
+          processFinalTranscript(transcript);
+        }
+      } else if (transcript && !isTriggered) {
+        liveTranscript.textContent = `Listening for wake word… ${transcript}`;
+      }
+    }
+  };
+  instance.onerror = (event) => {
+    if (!isListening || recognition !== instance) return;
+    log(`Speech recognition error: ${event.error}`, 'red');
+    const fatalErrors = new Set(['not-allowed', 'service-not-allowed', 'language-not-supported', 'audio-capture']);
+    if (fatalErrors.has(event.error)) log('The browser may need microphone permission or a supported local language pack before recovery can succeed.', 'yellow');
+    scheduleRecognitionRestart();
+  };
+  instance.onend = () => {
+    if (!isListening || recognition !== instance) return;
+    finalResultIndex = 0;
+    clearTimeout(recognitionHealthyTimer);
+    scheduleRecognitionRestart();
+  };
+  return instance;
+}
+
+function scheduleRecognitionRestart() {
+  if (!isListening || restartTimer) return;
+  clearTimeout(recognitionStartTimer);
+  clearTimeout(recognitionHealthyTimer);
+  const delay = Math.min(30000, 1000 * (2 ** restartAttempts));
+  restartAttempts = Math.min(restartAttempts + 1, 5);
+  setStatus(`Retrying local recognition in ${Math.ceil(delay / 1000)}s`, 'yellow');
+  vadIndicator.textContent = 'Recovering microphone recognition';
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    if (!isListening) return;
+    const previous = recognition;
+    if (previous) {
+      previous.onend = null;
+      previous.onerror = null;
+      try {
+        previous.abort();
+      } catch {
+        // The browser may already have ended this recognizer.
+      }
+    }
+    finalResultIndex = 0;
+    const language = el('cfgLanguage').value;
+    recognition = createRecognition(language);
+    try {
+      recognition.start();
+      recognitionStartTimer = setTimeout(() => {
+        if (isListening && statusBadge.textContent !== 'Listening locally') {
+          log('Local recognition did not start; continuing automatic recovery.', 'red');
+          scheduleRecognitionRestart();
+        }
+      }, 8000);
+    } catch (error) {
+      log(`Could not restart local recognition: ${error.message}`, 'red');
+      scheduleRecognitionRestart();
+    }
+  }, delay);
+}
+
+async function startListening() {
+  if (isStarting) return;
+  if (!localSpeechSupported) {
+    setStatus('On-device STT unsupported', 'red');
+    log('This browser does not support local SpeechRecognition language packs. No cloud STT fallback will be used.', 'red');
+    return;
+  }
+
+  isStarting = true;
+  btnToggle.disabled = true;
+  btnToggle.textContent = 'Preparing local speech…';
+  const language = el('cfgLanguage').value;
+  try {
+    await settingsReady;
+    if (el('cfgRequireWake').checked && configuredWakeWords().length === 0) {
+      throw new Error('Enter a wake word or turn off wake-word gating.');
+    }
+    const triggerWords = configuredSendTriggerWords();
+    if (triggerWords.length === 0 || triggerWords.length > 6) {
+      throw new Error('Enter an AI trigger phrase containing one to six words.');
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('This page cannot request microphone access. Open it on HTTPS or localhost in a supported browser.');
+    }
+    vadIndicator.textContent = 'Requesting microphone permission';
+    setStatus('Allow microphone access', 'yellow');
+    const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    permissionStream.getTracks().forEach((track) => track.stop());
+
+    setStatus('Checking local language pack', 'yellow');
+    let localOptions = { langs: [language], processLocally: true, quality: 'dictation' };
+    let availability = await Recognition.available(localOptions);
+    if (availability === 'unavailable') {
+      localOptions = { ...localOptions, quality: 'command' };
+      availability = await Recognition.available(localOptions);
+      if (availability !== 'unavailable') {
+        log('Dictation-quality pack unavailable; using local command-quality recognition.', 'yellow');
+      }
+    }
+    if (availability === 'downloadable' || availability === 'downloading') {
+      setStatus('Installing local language pack', 'yellow');
+      log(`Installing on-device ${language} speech pack…`, 'yellow');
+      const installed = await Recognition.install(localOptions);
+      if (!installed) throw new Error(`Could not install the local ${language} speech pack`);
+      availability = await Recognition.available(localOptions);
+    }
+    if (availability !== 'available') {
+      throw new Error(`On-device recognition for ${language} is ${availability}; choose another language or supported browser`);
+    }
+
+    vadIndicator.textContent = 'Starting browser speech capture';
+    recognition = createRecognition(language);
+    isListening = true;
+    isStarting = false;
+    setWakeState(!el('cfgRequireWake').checked);
+    if (isTriggered) liveTranscript.textContent = '';
+    btnToggle.disabled = false;
+    btnToggle.textContent = 'Stop Listening';
+    btnToggle.className = 'w-full py-3 bg-red-600 hover:bg-red-500 rounded-lg font-bold text-white transition';
+    try {
+      recognition.start();
+    } catch (error) {
+      log(`Could not start local recognition: ${error.message}; automatic recovery will continue.`, 'red');
+      scheduleRecognitionRestart();
+    }
+    void requestScreenWakeLock();
+    recognitionStartTimer = setTimeout(() => {
+      if (!isListening || statusBadge.textContent === 'Listening locally') return;
+      log('The browser did not start local speech recognition; continuing automatic recovery.', 'red');
+      scheduleRecognitionRestart();
+    }, 8000);
+    log(`Local ${language} speech recognition started with microphone permission granted.`, 'green');
+  } catch (error) {
+    isStarting = false;
+    isListening = false;
+    recognition = null;
+    setStatus('Local recognition unavailable', 'red');
+    log(error.message, 'red');
+    btnToggle.disabled = false;
+    btnToggle.textContent = 'Start Local Listening';
+    btnToggle.className = 'w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition';
+  }
+}
+
+el('cfgWakeWord').addEventListener('input', () => { wakeTail = []; });
+
+async function requestScreenWakeLock() {
+  if (!('wakeLock' in navigator) || document.hidden || !isListening) return;
+  try {
+    screenWakeLock = await navigator.wakeLock.request('screen');
+    if (!isListening) {
+      await screenWakeLock.release();
+      screenWakeLock = null;
+      return;
+    }
+    screenWakeLock.addEventListener('release', () => { screenWakeLock = null; });
+  } catch (error) {
+    log(`Screen wake lock unavailable: ${error.message}`, 'yellow');
+  }
+}
+
+function stopListening() {
+  flushDisplayBuffer();
+  isListening = false;
+  clearTimeout(restartTimer);
+  clearTimeout(recognitionStartTimer);
+  clearTimeout(recognitionHealthyTimer);
+  clearTimeout(phraseTimer);
+  if (recognition) {
+    recognition.onend = null;
+    try {
+      recognition.stop();
+    } catch (error) {
+      log(`Could not stop native recognition cleanly: ${error.message}`, 'yellow');
+    }
+  }
+  recognition = null;
+  if (screenWakeLock) void screenWakeLock.release();
+  screenWakeLock = null;
+  setWakeState(false);
+  vadIndicator.textContent = 'Mic idle';
+  liveTranscript.textContent = 'Transcribed text will appear here…';
+  btnToggle.textContent = 'Start Local Listening';
+  btnToggle.className = 'w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-white transition';
+  setStatus('Engine Off');
+  log('Local speech recognition stopped.', 'slate');
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && isListening) log('Keep this page visible for reliable continuous listening.', 'yellow');
+  else if (isListening) void requestScreenWakeLock();
+});
+
+btnToggle.addEventListener('click', () => {
+  if (isListening) stopListening();
+  else void startListening();
+});
+setStatus(localSpeechSupported ? 'Local STT supported' : 'Local STT unsupported', localSpeechSupported ? 'slate' : 'red');
+</script>
+</body>
+</html>
